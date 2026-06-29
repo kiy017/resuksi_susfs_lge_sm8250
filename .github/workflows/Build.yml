@@ -98,7 +98,8 @@ jobs:
         if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
         working-directory: kernel-source
         run: |
-          make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- INSTALL_MOD_PATH=modules_out modules_install
+          # FIX: Wrapped INSTALL_MOD_PATH in "$(pwd)/modules_out" to force an absolute path
+          make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- INSTALL_MOD_PATH="$(pwd)/modules_out" modules_install
           
           echo "Translating kernel build footprints to exact stock firmware signatures..."
           TARGET_KV_DIR=$(find modules_out/lib/modules -mindepth 1 -maxdepth 1 -type d | head -n 1)

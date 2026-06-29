@@ -24,7 +24,7 @@ env:
   # Architecture & Environment
   ARCH: arm64
   CCACHE: true
-  LOCALVERSION: "${{ github.event.inputs.localversion }}"
+  CUSTOM_NAME: "${{ github.event.inputs.localversion }}"
   KBUILD_BUILD_USER: kiyomi
   KBUILD_BUILD_HOST: yuki
   
@@ -56,35 +56,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libelf-dev unzip curl zip ccache python3
           
-      - name: Fetch Clang Toolchain
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download and Extract Android NDK 
         run: |
-          mkdir -p toolchains/clang-r563880c
-          cd toolchains
-          
-          # Avoids 404 issues by using GitHub CLI with a wildcard pattern
-          gh release download release --repo kiy017/clang-r563880c --pattern "*.tar.gz"
-          
-          # Extracts smoothly while handling any top-level nested folder structures
-          tar -xzf linux-x86-*.tar.gz -C clang-r563880c --strip-components=1
-          rm linux-x86-*.tar.gz
-          
-          # CRITICAL: This appends Clang to the global path so all following steps can see it
-          echo "$GITHUB_WORKSPACE/toolchains/clang-r563880c/bin" >> $GITHUB_PATH
-
-      - name: Generate Defconfig
-        working-directory: kernel-source
-        run: |
-          make O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- ${{ github.event.inputs.defconfig }} LOCALVERSION="${{ github.event.inputs.localversion }}"
-
+          curl -LO https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q android-ndk-r27c-linux.zip "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/*"
+          mkdir -p ${{ github.workspace }}/toolchain
+          mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/* ${{ github.workspace }}/toolchain/
+          rm -rf android-ndk-r27c-linux.zip android-ndk-r27c
+  
       - name: Compile Kernel
         working-directory: kernel-source
         run: |
-          make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- Image.gz-dtb dtbs modules
+          export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
+          
+          # Define target system properties
+          export ARCH=arm64
+          export SUBARCH=arm64
+          OUT_DIR="$(pwd)/out"
+          DEFCONFIG="${{ github.event.inputs.defconfig }}"
+          CUSTOM_NAME="${{ github.event.inputs.localversion }}"
+          
+          make O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- $DEFCONFIG
+          
+          make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- LOCALVERSION=$CUSTOM_NAME Image.gz-dtb dtbs modules
           
           if [ "${{ env.DO_DTBO }}" = "true" ]; then
-            make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- dtbo.img
+            make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- dtbo.img
           fi
 
       - name: Upload Image.gz-dtb Artifact

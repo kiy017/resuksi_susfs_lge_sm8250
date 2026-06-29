@@ -60,9 +60,10 @@ jobs:
         run: |
           mkdir -p toolchains
           cd toolchains
-          wget -q -o clang.tar.gz "https://github.com/kiy017/clang-r563880c/releases/download/release/linux-x86-f8439f0628d799092dd07df440a6334cab28939c-clang-r563880c.tar.gz"
+          mkdir clang-r563880c
+          wget -q -O clang.tar.gz "https://github.com/kiy017/clang-r563880c/releases/download/release/linux-x86-f8439f0628d799092dd07df440a6334cab28939c-clang-r563880c.tar.gz"
           tar -xzf clang.tar.gz -C clang-r563880c
-          export PATH="${{ github.workspace }}/clang-r563880c/bin:$PATH"
+          export PATH="${{ github.workspace }}/toolchains/clang-r563880c/bin:$PATH"
 
       - name: Generate Defconfig
         working-directory: kernel-source

@@ -1,0 +1,170 @@
+name: Android Kernel Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: 'Defconfig file (must exist in arch/arm64/configs/)'
+        required: true
+        default: 'rofik_defconfig'
+      localversion:
+        description: 'Local Version String (e.g., -resuki-susfs)'
+        required: true
+        default: '-resuki-susfs'
+      build_option:
+        description: 'Select Build Target'
+        required: true
+        type: choice
+        options:
+          - AnyKernel Zip (Kernel + Modules)
+          - Image.gz-dtb Only
+          - Test Build
+
+env:
+  # Architecture & Environment
+  ARCH: arm64
+  CCACHE: true
+  LOCALVERSION: "${{ github.event.inputs.localversion }}"
+  KBUILD_BUILD_USER: kiyomi
+  KBUILD_BUILD_HOST: yuki
+  
+  # Image Types
+  IMAGE_NAME: Image.gz-dtb
+  DO_DTBO: true
+  DO_DTB: true
+  DTB_IMG: dtb.img
+  
+  # Compiler Variables
+  CC: clang
+  CLANG_TRIPLE: aarch64-linux-gnu-
+  LLVM: 1
+  LLVM_IAS: 1
+  
+jobs:
+  build:
+    name: Build Kernel
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          path: kernel-source
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential bison flex libelf-dev unzip curl zip ccache python3
+          
+      - name: Fetch Clang Toolchain
+        run: |
+          mkdir -p toolchains
+          cd toolchains
+          wget -q -o clang.tar.gz "https://github.com/kiy017/clang-r563880c/releases/download/release/linux-x86-f8439f0628d799092dd07df440a6334cab28939c-clang-r563880c.tar.gz"
+          tar -xzf clang.tar.gz -C clang-r563880c
+          export PATH="${{ github.workspace }}/clang-r563880c/bin:$PATH"
+
+      - name: Generate Defconfig
+        working-directory: kernel-source
+        run: |
+          make O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- ${{ github.event.inputs.defconfig }} LOCALVERSION="${{ github.event.inputs.localversion }}"
+
+      - name: Compile Kernel
+        working-directory: kernel-source
+        run: |
+          make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- Image.gz-dtb dtbs modules
+          
+          if [ "${{ env.DO_DTBO }}" = "true" ]; then
+            make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- dtbo.img
+          fi
+
+      - name: Upload Image.gz-dtb Artifact
+        if: ${{ github.event.inputs.build_option == 'Image.gz-dtb Only' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IMAGE_NAME }}
+          path: kernel-source/out/arch/arm64/boot/${{ env.IMAGE_NAME }}
+
+      - name: Install & Realign Modules
+        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
+        working-directory: kernel-source
+        run: |
+          make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- INSTALL_MOD_PATH=modules_out modules_install
+          
+          echo "Translating kernel build footprints to exact stock firmware signatures..."
+          TARGET_KV_DIR=$(find modules_out/lib/modules -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          FLAT_STAGE="modules_out/flat_modules"
+          mkdir -p "$FLAT_STAGE"
+
+          # 1. Translate and rename techpack audio modules
+          find "$TARGET_KV_DIR/kernel/techpack/audio" -name "*.ko" 2>/dev/null | while read -r audio_mod; do
+            base_name=$(basename "$audio_mod" ".ko")
+            if [ "$base_name" = "machine_dlkm" ]; then
+              cp "$audio_mod" "$FLAT_STAGE/audio_machine_kona.ko"
+            else
+              clean_name=$(echo "$base_name" | sed 's/_dlkm//')
+              cp "$audio_mod" "$FLAT_STAGE/audio_${clean_name}.ko"
+            fi
+          done
+
+          # 2. Correct and map Wi-Fi module signature
+          if [ -f "$TARGET_KV_DIR/kernel/drivers/staging/qcacld-3.0/wlan.ko" ]; then
+            cp "$TARGET_KV_DIR/kernel/drivers/staging/qcacld-3.0/wlan.ko" "$FLAT_STAGE/qca_cld3_qca6390.ko"
+          fi
+
+          # 3. Gather any remaining compiled system driver binaries
+          find "$TARGET_KV_DIR/kernel" -name "*.ko" ! -path "*qcacld-3.0*" ! -path "*techpack/audio*" | while read -r misc_mod; do
+            base_name=$(basename "$misc_mod")
+            cp "$misc_mod" "$FLAT_STAGE/$base_name"
+          done
+
+          rm -rf "$TARGET_KV_DIR/kernel"
+          rm -f "$TARGET_KV_DIR"/source "$TARGET_KV_DIR"/build
+          mv "$FLAT_STAGE"/* "$TARGET_KV_DIR/"
+          rm -rf "$FLAT_STAGE"
+          find "$TARGET_KV_DIR" -name "*.ko" -type f -exec chmod 644 {} +
+
+          # 4. Inject stock modules.dep
+          cat << 'EOF' > "$TARGET_KV_DIR/modules.dep"
+          /vendor/lib/modules/audio_adsp_loader.ko: /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
+          /vendor/lib/modules/audio_stub.ko:
+          /vendor/lib/modules/audio_tx_macro.ko: /vendor/lib/modules/audio_swr_ctrl.ko /vendor/lib/modules/audio_swr.ko /vendor/lib/modules/audio_wcd_core.ko /vendor/lib/modules/audio_bolero_cdc.ko /vendor/lib/modules/audio_q6.ko /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
+          /vendor/lib/modules/tcp_westwood.ko:
+          /vendor/lib/modules/audio_wcd9xxx.ko: /vendor/lib/modules/audio_q6.ko /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
+          /vendor/lib/modules/audio_q6_notifier.ko: /vendor/lib/modules/audio_q6_pdr.ko
+          /vendor/lib/modules/audio_wcd_core.ko:
+          /vendor/lib/modules/audio_wsa883x.ko: /vendor/lib/modules/audio_swr.ko /vendor/lib/modules/audio_wcd_core.ko
+          /vendor/lib/modules/audio_snd_event.ko:
+          /vendor/lib/modules/cxd22xx.ko:
+          /vendor/lib/modules/audio_machine_kona.ko: /vendor/lib/modules/audio_wcd938x.ko /vendor/lib/modules/audio_mbhc.ko /vendor/lib/modules/audio_es9218.ko /vendor/lib/modules/audio_wcd9xxx.ko /vendor/lib/modules/audio_wsa881x.ko /vendor/lib/modules/audio_wsa883x.ko /vendor/lib/modules/audio_swr.ko /vendor/lib/modules/audio_wcd_core.ko /vendor/lib/modules/audio_bolero_cdc.ko /vendor/lib/modules/audio_q6.ko /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
+          EOF
+          touch "$TARGET_KV_DIR/modules.alias" "$TARGET_KV_DIR/modules.softdep"
+
+      - name: Fetch AnyKernel3
+        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel3
+          # Clean up unneeded git data
+          rm -rf anykernel3/.git
+
+      - name: Package AnyKernel3 Zip
+        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
+        run: |
+          cp kernel-source/out/arch/arm64/boot/Image.gz-dtb anykernel3/
+          
+          if [ "${{ env.DO_DTBO }}" = "true" ] && [ -f "kernel-source/out/arch/arm64/boot/dtbo.img" ]; then
+            cp kernel-source/out/arch/arm64/boot/dtbo.img anykernel3/
+          fi
+          
+          mkdir -p anykernel3/modules/vendor/lib/modules
+          cp -r kernel-source/modules_out/lib/modules/*/* anykernel3/modules/vendor/lib/modules/ || true
+          
+          cd anykernel3
+          zip -r9 "../anykernel${{ env.LOCALVERSION }}.zip" * -x .git README.md *placeholder
+
+      - name: Upload AnyKernel Release
+        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: anykernel${{ env.LOCALVERSION }}-${{ github.event.inputs.build_option == 'Test Build' && 'test' || 'release' }}
+          path: anykernel${{ env.LOCALVERSION }}.zip

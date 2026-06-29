@@ -84,7 +84,7 @@ jobs:
           make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- LOCALVERSION=$CUSTOM_NAME Image.gz-dtb dtbs modules
           
           if [ "${{ env.DO_DTBO }}" = "true" ]; then
-            make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- dtbo.img
+            make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- dtbs
           fi
 
       - name: Upload Image.gz-dtb Artifact

@@ -57,13 +57,21 @@ jobs:
           sudo apt-get install -y bc build-essential bison flex libelf-dev unzip curl zip ccache python3
           
       - name: Fetch Clang Toolchain
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p toolchains
+          mkdir -p toolchains/clang-r563880c
           cd toolchains
-          mkdir clang-r563880c
-          wget -q -O clang.tar.gz "https://github.com/kiy017/clang-r563880c/releases/download/release/linux-x86-f8439f0628d799092dd07df440a6334cab28939c-clang-r563880c.tar.gz"
-          tar -xzf clang.tar.gz -C clang-r563880c
-          export PATH="${{ github.workspace }}/toolchains/clang-r563880c/bin:$PATH"
+          
+          # Avoids 404 issues by using GitHub CLI with a wildcard pattern
+          gh release download release --repo kiy017/clang-r563880c --pattern "*.tar.gz"
+          
+          # Extracts smoothly while handling any top-level nested folder structures
+          tar -xzf linux-x86-*.tar.gz -C clang-r563880c --strip-components=1
+          rm linux-x86-*.tar.gz
+          
+          # CRITICAL: This appends Clang to the global path so all following steps can see it
+          echo "$GITHUB_WORKSPACE/toolchains/clang-r563880c/bin" >> $GITHUB_PATH
 
       - name: Generate Defconfig
         working-directory: kernel-source
@@ -145,7 +153,6 @@ jobs:
         if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel3
-          # Clean up unneeded git data
           rm -rf anykernel3/.git
 
       - name: Package AnyKernel3 Zip

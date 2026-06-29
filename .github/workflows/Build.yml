@@ -64,11 +64,14 @@ jobs:
           mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/* ${{ github.workspace }}/toolchain/
           rm -rf android-ndk-r27c-linux.zip android-ndk-r27c
   
+      - name: Apply Resukisu Pathes
+        working-directory: kernel-source
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
       - name: Compile Kernel
         working-directory: kernel-source
         run: |
           export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
-          
           # Define target system properties
           export ARCH=arm64
           export SUBARCH=arm64
@@ -165,11 +168,11 @@ jobs:
           cp -r kernel-source/modules_out/lib/modules/*/* anykernel3/modules/vendor/lib/modules/ || true
           
           cd anykernel3
-          zip -r9 "../anykernel${{ env.LOCALVERSION }}.zip" * -x .git README.md *placeholder
+          zip -r9 "../anykernel${{ env.CUSTOM_NAME }}.zip" * -x .git README.md *placeholder
 
       - name: Upload AnyKernel Release
         if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
         uses: actions/upload-artifact@v4
         with:
-          name: anykernel${{ env.LOCALVERSION }}-${{ github.event.inputs.build_option == 'Test Build' && 'test' || 'release' }}
-          path: anykernel${{ env.LOCALVERSION }}.zip
+          name: anykernel${{ env.CUSTOM_NAME }}-${{ github.event.inputs.build_option == 'Test Build' && 'test' || 'release' }}
+          path: anykernel${{ env.CUSTOM_NAME }}.zip

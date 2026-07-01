@@ -64,8 +64,8 @@ jobs:
       run: |
           curl -LO https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
           unzip -q android-ndk-r27c-linux.zip "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/*"
-          mkdir -p ${{ github.workspace }}/toolchain/clang-r563880c
-          mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/* ${{ github.workspace }}/toolchain/clang-r563880c/
+          mkdir -p ${{ github.workspace }}/toolchains/clang-r563880c
+          mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/* ${{ github.workspace }}/toolchains/clang-r563880c/
           rm -rf android-ndk-r27c-linux.zip android-ndk-r27c
 
     - name: Build Kernel

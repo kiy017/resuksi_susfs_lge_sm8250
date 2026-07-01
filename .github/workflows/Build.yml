@@ -70,7 +70,7 @@ jobs:
 
     - name: Build Kernel
       run: |
-        chmod +x build.sh build-miui.sh
+        chmod +x build.sh
         
         echo "Using script: ${{ inputs.script }}"
 

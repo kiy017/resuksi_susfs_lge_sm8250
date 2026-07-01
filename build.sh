@@ -5,7 +5,7 @@
 # Ensure the script exits on error
 set -e
 
-TOOLCHAIN_PATH=$HOME/kernel/toolchains/clang-r563880c/bin
+TOOLCHAIN_PATH=$HOME/toolchains/clang-r563880c/bin
 TARGET_DEVICE=$1
 
 if [ -z "$1" ]; then

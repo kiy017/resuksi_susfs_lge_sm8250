@@ -60,13 +60,13 @@ jobs:
           kernel-ccache-${{ inputs.device }}-
           kernel-ccache-
 
-    - name: Setup Toolchain (android-ndk-r27c)
+    - name: Download and Extract Android NDK 
       run: |
-          curl -LO https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
-          unzip -q android-ndk-r27c-linux.zip "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/*"
-          mkdir -p ${{ github.workspace }}/toolchain
-          mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/* ${{ github.workspace }}/toolchain/
-          rm -rf android-ndk-r27c-linux.zip android-ndk-r27c
+        curl -LO https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+        unzip -q android-ndk-r27c-linux.zip "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/*"
+        mkdir -p ${{ github.workspace }}/toolchain
+        mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/* ${{ github.workspace }}/toolchain/
+        rm -rf android-ndk-r27c-linux.zip android-ndk-r27c
 
     - name: Build Kernel
       run: |

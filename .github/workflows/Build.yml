@@ -1,179 +1,90 @@
-name: Android Kernel Build
+name: Build Kernel
 
 on:
   workflow_dispatch:
     inputs:
-      defconfig:
-        description: 'Defconfig file (must exist in arch/arm64/configs/)'
+      device:
+        description: 'Target Device Codename'
         required: true
-        default: 'rofik_defconfig'
-      localversion:
-        description: 'Local Version String (e.g., -resuki-susfs)'
-        required: true
-        default: '-resuki-susfs'
-      build_option:
-        description: 'Select Build Target'
-        required: true
+        default: 'rofik'
         type: choice
         options:
-          - AnyKernel Zip (Kernel + Modules)
-          - Image.gz-dtb Only
-          - Test Build
+          - rofik
+          - timelm
+          - nethunter
+          
+      script:
+        description: 'Select Build Script'
+        required: true
+        default: 'build.sh'
+        type: choice
+        options:
+          - build.sh
 
-env:
-  # Architecture & Environment
-  ARCH: arm64
-  CCACHE: true
-  CUSTOM_NAME: "${{ github.event.inputs.localversion }}"
-  KBUILD_BUILD_USER: kiyomi
-  KBUILD_BUILD_HOST: yuki
-  
-  # Image Types
-  IMAGE_NAME: Image.gz-dtb
-  DO_DTBO: true
-  DO_DTB: true
-  DTB_IMG: dtb.img
-  
-  # Compiler Variables
-  CC: clang
-  CLANG_TRIPLE: aarch64-linux-gnu-
-  LLVM: 1
-  LLVM_IAS: 1
-  
+      ksu:
+        description: 'Enable KernelSU (ReSukiSU-SuSFS)'
+        required: true
+        type: boolean
+        default: true
+
 jobs:
   build:
-    name: Build Kernel
-    runs-on: ubuntu-22.04
+    name: Build Kernel for ${{ inputs.device }} (${{ inputs.script }}) (${{ inputs.ksu && 'KSU' || 'NoKSU' }})
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Kernel Source
-        uses: actions/checkout@v4
-        with:
-          path: kernel-source
+    - name: Checkout Source
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
-      - name: Setup Build Environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential bison flex libelf-dev unzip curl zip ccache python3
-          
-      - name: Download and Extract Android NDK 
-        run: |
+    - name: Cleanup Disk Space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
+
+    - name: Setup Cache (ccache)
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ccache_mikernel
+        key: kernel-ccache-${{ inputs.device }}-${{ inputs.script }}-${{ github.run_id }}
+        restore-keys: |
+          kernel-ccache-${{ inputs.device }}-${{ inputs.script }}-
+          kernel-ccache-${{ inputs.device }}-
+          kernel-ccache-
+
+    - name: Setup Toolchain (android-ndk-r27c)
+      run: |
           curl -LO https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
-          unzip -q android-ndk-r27c-linux.zip "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/*"
+          unzip -q android-ndk-r27c-linux.zip "clang-r563880c/*"
           mkdir -p ${{ github.workspace }}/toolchain
-          mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/* ${{ github.workspace }}/toolchain/
-          rm -rf android-ndk-r27c-linux.zip android-ndk-r27c
-  
-      - name: Apply Resukisu Pathes
-        working-directory: kernel-source
-        run: |
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-      - name: Compile Kernel
-        working-directory: kernel-source
-        run: |
-          export PATH="${{ github.workspace }}/toolchain/bin:$PATH"
-          # Define target system properties
-          export ARCH=arm64
-          export SUBARCH=arm64
-          OUT_DIR="$(pwd)/out"
-          DEFCONFIG="${{ github.event.inputs.defconfig }}"
-          CUSTOM_NAME="${{ github.event.inputs.localversion }}"
-          
-          make O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- $DEFCONFIG
-          
-          make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- LOCALVERSION=$CUSTOM_NAME Image.gz-dtb dtbs modules
-          
-          if [ "${{ env.DO_DTBO }}" = "true" ]; then
-            make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- dtbs
-          fi
+          mv clang-r563880c/* ${{ github.workspace }}/toolchain/
+          rm -rf android-ndk-r27c-linux.zip 
 
-      - name: Upload Image.gz-dtb Artifact
-        if: ${{ github.event.inputs.build_option == 'Image.gz-dtb Only' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.IMAGE_NAME }}
-          path: kernel-source/out/arch/arm64/boot/${{ env.IMAGE_NAME }}
+    - name: Build Kernel
+      run: |
+        chmod +x build.sh build-miui.sh
+        
+        echo "Using script: ${{ inputs.script }}"
 
-      - name: Install & Realign Modules
-        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
-        working-directory: kernel-source
-        run: |
-          # FIX: Wrapped INSTALL_MOD_PATH in "$(pwd)/modules_out" to force an absolute path
-          make -j$(nproc) O=out CC="ccache clang" LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- INSTALL_MOD_PATH="$(pwd)/modules_out" modules_install
-          
-          echo "Translating kernel build footprints to exact stock firmware signatures..."
-          TARGET_KV_DIR=$(find modules_out/lib/modules -mindepth 1 -maxdepth 1 -type d | head -n 1)
-          FLAT_STAGE="modules_out/flat_modules"
-          mkdir -p "$FLAT_STAGE"
+        if [ "${{ inputs.ksu }}" == "true" ]; then
+          echo "Building with KernelSU..."
+          bash ${{ inputs.script }} ${{ inputs.device }} ksu
+        else
+          echo "Building without KernelSU..."
+          bash ${{ inputs.script }} ${{ inputs.device }}
+        fi
 
-          # 1. Translate and rename techpack audio modules
-          find "$TARGET_KV_DIR/kernel/techpack/audio" -name "*.ko" 2>/dev/null | while read -r audio_mod; do
-            base_name=$(basename "$audio_mod" ".ko")
-            if [ "$base_name" = "machine_dlkm" ]; then
-              cp "$audio_mod" "$FLAT_STAGE/audio_machine_kona.ko"
-            else
-              clean_name=$(echo "$base_name" | sed 's/_dlkm//')
-              cp "$audio_mod" "$FLAT_STAGE/audio_${clean_name}.ko"
-            fi
-          done
-
-          # 2. Correct and map Wi-Fi module signature
-          if [ -f "$TARGET_KV_DIR/kernel/drivers/staging/qcacld-3.0/wlan.ko" ]; then
-            cp "$TARGET_KV_DIR/kernel/drivers/staging/qcacld-3.0/wlan.ko" "$FLAT_STAGE/qca_cld3_qca6390.ko"
-          fi
-
-          # 3. Gather any remaining compiled system driver binaries
-          find "$TARGET_KV_DIR/kernel" -name "*.ko" ! -path "*qcacld-3.0*" ! -path "*techpack/audio*" | while read -r misc_mod; do
-            base_name=$(basename "$misc_mod")
-            cp "$misc_mod" "$FLAT_STAGE/$base_name"
-          done
-
-          rm -rf "$TARGET_KV_DIR/kernel"
-          rm -f "$TARGET_KV_DIR"/source "$TARGET_KV_DIR"/build
-          mv "$FLAT_STAGE"/* "$TARGET_KV_DIR/"
-          rm -rf "$FLAT_STAGE"
-          find "$TARGET_KV_DIR" -name "*.ko" -type f -exec chmod 644 {} +
-
-          # 4. Inject stock modules.dep
-          cat << 'EOF' > "$TARGET_KV_DIR/modules.dep"
-          /vendor/lib/modules/audio_adsp_loader.ko: /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
-          /vendor/lib/modules/audio_stub.ko:
-          /vendor/lib/modules/audio_tx_macro.ko: /vendor/lib/modules/audio_swr_ctrl.ko /vendor/lib/modules/audio_swr.ko /vendor/lib/modules/audio_wcd_core.ko /vendor/lib/modules/audio_bolero_cdc.ko /vendor/lib/modules/audio_q6.ko /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
-          /vendor/lib/modules/tcp_westwood.ko:
-          /vendor/lib/modules/audio_wcd9xxx.ko: /vendor/lib/modules/audio_q6.ko /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
-          /vendor/lib/modules/audio_q6_notifier.ko: /vendor/lib/modules/audio_q6_pdr.ko
-          /vendor/lib/modules/audio_wcd_core.ko:
-          /vendor/lib/modules/audio_wsa883x.ko: /vendor/lib/modules/audio_swr.ko /vendor/lib/modules/audio_wcd_core.ko
-          /vendor/lib/modules/audio_snd_event.ko:
-          /vendor/lib/modules/cxd22xx.ko:
-          /vendor/lib/modules/audio_machine_kona.ko: /vendor/lib/modules/audio_wcd938x.ko /vendor/lib/modules/audio_mbhc.ko /vendor/lib/modules/audio_es9218.ko /vendor/lib/modules/audio_wcd9xxx.ko /vendor/lib/modules/audio_wsa881x.ko /vendor/lib/modules/audio_wsa883x.ko /vendor/lib/modules/audio_swr.ko /vendor/lib/modules/audio_wcd_core.ko /vendor/lib/modules/audio_bolero_cdc.ko /vendor/lib/modules/audio_q6.ko /vendor/lib/modules/audio_apr.ko /vendor/lib/modules/audio_q6_notifier.ko /vendor/lib/modules/audio_q6_pdr.ko /vendor/lib/modules/audio_snd_event.ko
-          EOF
-          touch "$TARGET_KV_DIR/modules.alias" "$TARGET_KV_DIR/modules.softdep"
-
-      - name: Fetch AnyKernel3
-        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel3
-          rm -rf anykernel3/.git
-
-      - name: Package AnyKernel3 Zip
-        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
-        run: |
-          cp kernel-source/out/arch/arm64/boot/Image.gz-dtb anykernel3/
-          
-          if [ "${{ env.DO_DTBO }}" = "true" ] && [ -f "kernel-source/out/arch/arm64/boot/dtbo.img" ]; then
-            cp kernel-source/out/arch/arm64/boot/dtbo.img anykernel3/
-          fi
-          
-          mkdir -p anykernel3/modules/vendor/lib/modules
-          cp -r kernel-source/modules_out/lib/modules/*/* anykernel3/modules/vendor/lib/modules/ || true
-          
-          cd anykernel3
-          zip -r9 "../anykernel${{ env.CUSTOM_NAME }}.zip" * -x .git README.md *placeholder
-
-      - name: Upload AnyKernel Release
-        if: ${{ github.event.inputs.build_option != 'Image.gz-dtb Only' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: anykernel${{ env.CUSTOM_NAME }}-${{ github.event.inputs.build_option == 'Test Build' && 'test' || 'release' }}
-          path: anykernel${{ env.CUSTOM_NAME }}.zip
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: Kernel-${{ inputs.device }}-${{ inputs.script }}-${{ inputs.ksu && 'KSU' || 'NoKSU' }}-${{ github.run_number }}
+        path: ./*.zip
+        if-no-files-found: error
